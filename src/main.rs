@@ -1,7 +1,7 @@
 extern crate chrono;
 use chrono::prelude::*;
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-use std::fs::File;
+use std::fs::{File};
 use std::io::Write;
 use windows::{
     core::{GUID,HSTRING,PCWSTR,PWSTR},
@@ -125,8 +125,31 @@ fn get_profile_xml(
     Ok(xml_string.to_os_string())
 }
 
-fn main() -> std::io::Result<()> {
+enum SaveFileType {
+    Txt,
+    Json,
+}
 
+fn save_results(output: &[u8], file_name: &str, file_type: SaveFileType) -> std::io::Result<()> {
+    let ext = match file_type {
+        SaveFileType::Txt => "txt",
+        SaveFileType::Json => "json"
+    };
+
+    let mut file = File::create(format!("{}.{}", file_name, ext))?;
+    return match file.write(output) {
+        Ok(_) => {
+            println!("Saved output as {} file!", ext);
+            Ok(())
+        },
+        Err(e) => {
+            eprintln!("Failed to write output to a file. {:?}", e);
+            Err(e)
+        }
+    }
+}
+
+fn main() -> std::io::Result<()> {
     let wlan_handle = open_wlan_handle(WLAN_API_VERSION_2_0).expect("Failed to open WLAN handle");
 
     let interface_ptr = match enum_wlan_interfaces(wlan_handle) {
@@ -211,24 +234,23 @@ fn main() -> std::io::Result<()> {
                 }
             };
 
-
+            let profile_name_string = profile_name.to_string_lossy().to_string();
             match auth_type.as_str() {
                 "open" => {
-                    output_json.push_str(format!("\t{{\"ssid\": {:?}, \"auth\": \"none\", \"password\":\"\"}},\n", profile_name.to_string_lossy().to_string()).as_str());
-                    output.push_str(format!("Wifi name: {:?}, No password", profile_name.to_string_lossy().to_string()).as_str());
-
+                    output_json.push_str(format!("\t{{\"ssid\": {:?}, \"auth\": \"none\", \"password\":\"\"}},\n", profile_name_string).as_str());
+                    output.push_str(format!("Wifi name: {:?}, No password", profile_name_string).as_str());
                 },
                 "WPA2" | "WPA2PSK" => {
                     if let Some(password) = traverse_xml_tree(&root, &["MSM", "security", "sharedKey", "keyMaterial"]) {
                         output_json.push_str(format!(
                             "\t{{\"ssid\": {:?}, \"auth\": {:?}, \"password\": {:?}}},\n",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type,
                             password
                         ).as_str());
                         output.push_str(format!(
                             "Wifi name: {:?}, Authentication: {:?}, Password: {}\n",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type,
                             password
                         ).as_str());
@@ -238,25 +260,25 @@ fn main() -> std::io::Result<()> {
                     if let Some(password) = traverse_xml_tree(&root, &["MSM", "security", "sharedKey", "keyMaterial"]) {
                         output_json.push_str(format!(
                             "\t{{\"ssid\": {:?}, \"auth\": {:?}, \"password\": {:?}}},\n",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type,
                             password
                         ).as_str());
                         output.push_str(format!(
                             "Wifi name: {:?}, Authentication: {:?}, Password: {}\n",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type,
                             password
                         ).as_str());
                     } else {
                         output_json.push_str(format!(
                             "\t{{\"ssid\": {:?}, \"auth\": {:?}}},\n",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type
                         ).as_str());
                         output.push_str(format!(
                             "Wifi name: {:?}, Authentication: {:?}",
-                            profile_name.to_string_lossy().to_string(),
+                            profile_name_string,
                             auth_type
                         ).as_str());
                     }
@@ -272,17 +294,8 @@ fn main() -> std::io::Result<()> {
         println!("{}", output);
         let date_as_string = Utc::now().format("%Y-%m-%d").to_string();
 
-        let mut file_json = File::create(format!("{}_WLAN_EXTRACTION.json", date_as_string))?;
-        match file_json.write(output_json.as_bytes()) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Failed to write output to a file. {:?}", e)
-        };
-
-        let mut file = File::create(format!("{}_WLAN_EXTRACTION.txt", date_as_string))?;
-        match file.write(output.as_bytes()) {
-            Ok(_) => {},
-            Err(e) => eprintln!("Failed to write output to a file. {:?}", e)
-        };
+        save_results(&output.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Txt)?;
+        save_results(&output_json.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Json)?;
     }
 
     unsafe { WlanFreeMemory(interface_ptr.cast()) };
