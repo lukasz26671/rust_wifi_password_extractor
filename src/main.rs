@@ -2,7 +2,7 @@ extern crate chrono;
 use chrono::prelude::*;
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 use std::fs::{File};
-use std::io::Write;
+use std::io::{Read, stdin, Write};
 use windows::{
     core::{GUID,HSTRING,PCWSTR,PWSTR},
     Data::Xml::Dom::{XmlDocument, XmlElement},
@@ -34,7 +34,7 @@ fn open_wlan_handle(api_version: u32) -> Result<HANDLE, windows::core::Error> {
             };
             eprintln!("Reason: {:?}", reason);
 
-            std::process::exit(1);
+            return Err(e);
         }
     }
 }
@@ -149,15 +149,21 @@ fn save_results(output: &[u8], file_name: &str, file_type: SaveFileType) -> std:
     }
 }
 
-fn main() -> std::io::Result<()> {
-    let wlan_handle = open_wlan_handle(WLAN_API_VERSION_2_0).expect("Failed to open WLAN handle");
+fn run() -> Result<(), bool> {
+    let mut had_errors = false;
+    let wlan_handle = match open_wlan_handle(WLAN_API_VERSION_2_0) {
+        Ok(handle) => handle,
+        Err(_e) => {
+            return Err(true);
+        }
+    };
 
     let interface_ptr = match enum_wlan_interfaces(wlan_handle) {
         Ok(interfaces) => interfaces,
         Err(e) => {
             eprintln!("Failed to get wireless interfaces: {:?}", e);
             unsafe { WlanCloseHandle(wlan_handle, None) };
-            std::process::exit(1);
+            return Err(true);
         }
     };
 
@@ -173,6 +179,7 @@ fn main() -> std::io::Result<()> {
             Some(name) => name,
             None => {
                 eprintln!("Could not parse interface description");
+                had_errors = true;
                 continue;
             }
         };
@@ -181,6 +188,7 @@ fn main() -> std::io::Result<()> {
             Ok(profiles) => profiles,
             Err(_e) => {
                 eprintln!("Failed to retrieve profiles");
+                had_errors = true;
                 continue;
             }
         };
@@ -198,6 +206,7 @@ fn main() -> std::io::Result<()> {
                 Some(name) => name,
                 None => {
                     eprintln!("Could not parse profile name");
+                    had_errors = true;
                     continue;
                 }
             };
@@ -206,6 +215,7 @@ fn main() -> std::io::Result<()> {
                 Ok(data) => data,
                 Err(_e) => {
                     eprintln!("Failed to extract XML data");
+                    had_errors = true;
                     continue;
                 }
             };
@@ -214,6 +224,7 @@ fn main() -> std::io::Result<()> {
                 Ok(data) => data,
                 Err(_e) => {
                     eprintln!("Failed to extract XML document");
+                    had_errors = true;
                     continue;
                 }
             };
@@ -222,6 +233,7 @@ fn main() -> std::io::Result<()> {
                 Ok(root) => root,
                 Err(_e) => {
                     eprintln!("Failed to get document root for profile XML");
+                    had_errors = true;
                     continue;
                 }
             };
@@ -230,6 +242,7 @@ fn main() -> std::io::Result<()> {
                 Some(t) => t,
                 None => {
                     eprintln!("Failed to get the auth type for this profile");
+                    had_errors = true;
                     continue;
                 }
             };
@@ -294,12 +307,32 @@ fn main() -> std::io::Result<()> {
         println!("{}", output);
         let date_as_string = Utc::now().format("%Y-%m-%d").to_string();
 
-        save_results(&output.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Txt)?;
-        save_results(&output_json.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Json)?;
+        if save_results(&output.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Txt).is_err()
+            || save_results(&output_json.as_bytes(), format!("{}_WLAN_EXTRACTION", date_as_string).as_str(), SaveFileType::Json).is_err() {
+            had_errors = true;
+        }
     }
 
     unsafe { WlanFreeMemory(interface_ptr.cast()) };
     unsafe { WlanCloseHandle(wlan_handle, None) };
 
-    Ok(())
+    return match had_errors {
+        true => Err(false),
+        false => Ok(())
+    };
+}
+
+fn main(){
+    match run() {
+        Ok(_r) => { },
+        Err(fatal) => {
+            println!("Press any key to continue...");
+            stdin().read(&mut [0u8]).unwrap();
+
+            std::process::exit(match fatal {
+                true => 1,
+                false => 0
+            })
+        }
+    }
 }
